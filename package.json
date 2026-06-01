@@ -1,0 +1,49 @@
+{
+	"name": "@nvidia/openclaw-dynamo-provider",
+	"version": "0.1.0",
+	"description": "OpenClaw plugin that registers a Dynamo OpenAI-compatible provider with agent-context tracing, subagent KV session isolation, and tool-event relay.",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": ["dist", "src", "README.md"],
+	"keywords": ["openclaw-plugin", "openclaw-extension", "dynamo", "openai-compatible"],
+	"license": "Apache-2.0",
+	"scripts": {
+		"build": "tsc -p tsconfig.build.json",
+		"check": "tsc --noEmit",
+		"test": "vitest run"
+	},
+	"openclaw": {
+		"extensions": ["./src/index.ts"],
+		"providers": ["dynamo"],
+		"compat": {
+			"pluginApi": ">=2026.3.24-beta.2",
+			"minGatewayVersion": "2026.3.24-beta.2"
+		},
+		"build": {
+			"openclawVersion": "2026.3.24-beta.2",
+			"pluginSdkVersion": "2026.3.24-beta.2"
+		}
+	},
+	"dependencies": {
+		"@msgpack/msgpack": "^3.1.3",
+		"zeromq": "^6.5.0"
+	},
+	"peerDependencies": {
+		"openclaw": ">=2026.3.24-beta.2"
+	},
+	"devDependencies": {
+		"@types/node": "^24.10.1",
+		"typescript": "^5.9.3",
+		"vitest": "^3.2.4"
+	},
+	"engines": {
+		"node": ">=20.0.0"
+	}
+}

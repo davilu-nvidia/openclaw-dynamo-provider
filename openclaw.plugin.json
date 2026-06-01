@@ -1,0 +1,34 @@
+{
+	"id": "dynamo",
+	"name": "Dynamo Provider",
+	"description": "Dynamo OpenAI-compatible provider with agent-context tracing and subagent KV session isolation.",
+	"providers": ["dynamo"],
+	"modelSupport": {
+		"modelPrefixes": ["dynamo/"]
+	},
+	"setup": {
+		"providers": [
+			{
+				"id": "dynamo",
+				"envVars": ["DYNAMO_API_KEY", "DYNAMO_BASE_URL"]
+			}
+		]
+	},
+	"providerAuthChoices": [
+		{
+			"provider": "dynamo",
+			"method": "api-key",
+			"choiceId": "dynamo-api-key",
+			"choiceLabel": "Dynamo API key",
+			"groupId": "dynamo",
+			"groupLabel": "Dynamo",
+			"cliFlag": "--dynamo-api-key",
+			"cliOption": "--dynamo-api-key <key>",
+			"cliDescription": "Dynamo API key (local Dynamo usually ignores this)"
+		}
+	],
+	"configSchema": {
+		"type": "object",
+		"additionalProperties": false
+	}
+}
