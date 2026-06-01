@@ -18,6 +18,7 @@ import {
 	DynamoSubagentSession,
 	mergeDynamoNvext,
 } from "./dynamo-provider.js";
+import { OslPredictor } from "./osl-predictor.js";
 import {
 	DynamoToolEventPublisher,
 	DynamoToolEventRelay,
@@ -32,6 +33,9 @@ export default definePluginEntry({
 	register(api) {
 		applySubagentBridge();
 		const config = readDynamoConfig();
+
+		// OSL predictor: online, per-session, adapts to workload
+		const oslPredictor = config.traceEnabled ? new OslPredictor() : undefined;
 
 		// Subagent KV session (only for child agents)
 		const session =
@@ -132,22 +136,18 @@ export default definePluginEntry({
 						return inner(params);
 					}
 
-					// Build agent_context
 					const agentContext = buildDynamoAgentContext(config, ctx.sessionId);
 
-					// Build agent_hints (use max_tokens from body as OSL fallback)
-					const bodyRecord = params.body as Record<string, unknown> | undefined;
-					const maxTokens = bodyRecord?.max_tokens as number | undefined;
-					const agentHints = buildDynamoAgentHints(config, maxTokens);
+					// Use OSL predictor for agent_hints.osl (falls back to config.osl)
+					const predictedOsl = oslPredictor?.predict();
+					const agentHints = buildDynamoAgentHints(config, predictedOsl);
 
-					// Build session_control for subagent KV isolation
 					let sessionControl = undefined;
 					if (session) {
 						session.modelId = ctx.model?.id ?? "";
 						sessionControl = session.controlForTurn();
 					}
 
-					// Inject all nvext fields
 					if (params.body) {
 						params.body = mergeDynamoNvext(params.body, agentContext, agentHints, sessionControl);
 					}
@@ -175,17 +175,36 @@ export default definePluginEntry({
 			},
 		});
 
-		// --- 3. Session lifecycle: KV isolation ---
+		// --- 3. Session lifecycle: KV isolation + OSL predictor reset ---
 		if (session) {
 			api.on("agent_end", async () => {
 				await session.close();
 			});
 			api.on("session_end", async () => {
 				await session.close();
+				oslPredictor?.reset();
+			});
+		} else if (oslPredictor) {
+			api.on("session_end", () => {
+				oslPredictor.reset();
 			});
 		}
 
-		// --- 4. Tool event relay ---
+		// --- 4. OSL predictor feedback: update with actual output tokens ---
+		// The predictor learns from observed outputs. We hook into the usage
+		// reported after each LLM turn. OpenClaw emits this as part of the
+		// message stream; we observe it via the tool_execution_end event where
+		// output_tokens is available in the result metadata.
+		if (oslPredictor) {
+			api.on("message_complete", (event) => {
+				const outputTokens = event?.usage?.output_tokens ?? event?.usage?.completion_tokens;
+				if (typeof outputTokens === "number" && outputTokens >= 0) {
+					oslPredictor.update(outputTokens);
+				}
+			});
+		}
+
+		// --- 5. Tool event relay ---
 		if (config.traceEnabled) {
 			const relayConfig = readDynamoToolRelayConfig();
 			if (relayConfig.endpoint) {
@@ -218,4 +237,5 @@ export default definePluginEntry({
 
 export * from "./config.js";
 export * from "./dynamo-provider.js";
+export * from "./osl-predictor.js";
 export * from "./tool-relay.js";
