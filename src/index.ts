@@ -12,11 +12,11 @@ import {
 } from "./config.js";
 import {
 	buildDynamoAgentContext,
+	buildDynamoAgentHints,
 	buildDynamoHeaders,
 	discoverDynamoModels,
 	DynamoSubagentSession,
-	mergeDynamoAgentContext,
-	mergeDynamoSessionControl,
+	mergeDynamoNvext,
 } from "./dynamo-provider.js";
 import {
 	DynamoToolEventPublisher,
@@ -27,7 +27,7 @@ import {
 export default definePluginEntry({
 	id: "dynamo",
 	name: "Dynamo Provider",
-	description: "Dynamo OpenAI-compatible provider with agent-context tracing and KV session isolation.",
+	description: "Dynamo OpenAI-compatible provider with agent hints, context tracing, and KV session isolation.",
 
 	register(api) {
 		applySubagentBridge();
@@ -104,7 +104,6 @@ export default definePluginEntry({
 				},
 			},
 
-			// Accept arbitrary dynamo/<model-id>
 			resolveDynamicModel: (ctx) => ({
 				id: ctx.modelId,
 				name: ctx.modelId,
@@ -118,38 +117,39 @@ export default definePluginEntry({
 				maxTokens: 8192,
 			}),
 
-			// Inject x-request-id header per turn
-			resolveTransportTurnState: (ctx) => ({
+			resolveTransportTurnState: () => ({
 				headers: buildDynamoHeaders(undefined),
 			}),
 
-			// Inject nvext.agent_context and session_control into request body
 			wrapStreamFn: (ctx) => {
 				if (!ctx.streamFn) return undefined;
 				const inner = ctx.streamFn;
 
 				return async (params) => {
-					// Always add x-request-id
 					params.headers = buildDynamoHeaders(params.headers);
 
-					// DYN_AGENT_TRACE off: plain provider, no agentic nvext
 					if (!config.traceEnabled) {
 						return inner(params);
 					}
 
-					// Build and inject agent_context
+					// Build agent_context
 					const agentContext = buildDynamoAgentContext(config, ctx.sessionId);
-					if (params.body) {
-						params.body = mergeDynamoAgentContext(params.body, agentContext);
-					}
 
-					// Subagent KV session control
+					// Build agent_hints (use max_tokens from body as OSL fallback)
+					const bodyRecord = params.body as Record<string, unknown> | undefined;
+					const maxTokens = bodyRecord?.max_tokens as number | undefined;
+					const agentHints = buildDynamoAgentHints(config, maxTokens);
+
+					// Build session_control for subagent KV isolation
+					let sessionControl = undefined;
 					if (session) {
 						session.modelId = ctx.model?.id ?? "";
-						const sessionControl = session.controlForTurn();
-						if (params.body) {
-							params.body = mergeDynamoSessionControl(params.body, sessionControl);
-						}
+						sessionControl = session.controlForTurn();
+					}
+
+					// Inject all nvext fields
+					if (params.body) {
+						params.body = mergeDynamoNvext(params.body, agentContext, agentHints, sessionControl);
 					}
 
 					return inner(params);
@@ -191,7 +191,7 @@ export default definePluginEntry({
 			if (relayConfig.endpoint) {
 				const publisher = new DynamoToolEventPublisher(relayConfig);
 				publisher.start().catch(() => {});
-				const relay = new DynamoToolEventRelay(config, publisher, config.sessionId);
+				const relay = new DynamoToolEventRelay(config, publisher, config.workflowId);
 
 				api.on("tool_execution_start", (event) => {
 					relay.handleToolExecutionStart({

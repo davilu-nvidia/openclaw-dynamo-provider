@@ -4,6 +4,7 @@
 import { randomUUID } from "node:crypto";
 import type {
 	DynamoAgentContext,
+	DynamoAgentHints,
 	DynamoProviderRuntimeConfig,
 	DynamoSessionControl,
 } from "./config.js";
@@ -25,49 +26,60 @@ export function buildDynamoAgentContext(
 	config: DynamoProviderRuntimeConfig,
 	sessionId?: string,
 ): DynamoAgentContext {
-	const trajectoryId = config.trajectoryId ?? sessionId;
-	const resolvedSessionId = config.sessionId ?? sessionId;
 	return {
-		...(trajectoryId ? { trajectory_id: trajectoryId } : {}),
-		...(config.parentTrajectoryId ? { parent_trajectory_id: config.parentTrajectoryId } : {}),
-		...(resolvedSessionId ? { session_id: resolvedSessionId } : {}),
-		session_type_id: config.sessionTypeId,
-		phase: "reasoning",
+		workflow_type_id: config.workflowTypeId,
+		workflow_id: config.workflowId ?? sessionId ?? "",
+		program_id: config.programId ?? sessionId ?? "",
+		...(config.parentProgramId ? { parent_program_id: config.parentProgramId } : {}),
 	};
 }
 
-export function mergeDynamoAgentContext(payload: unknown, agentContext: DynamoAgentContext): unknown {
-	const payloadRecord = isRecord(payload) ? payload : {};
-	const existingNvext = isRecord(payloadRecord.nvext) ? payloadRecord.nvext : {};
-	const existingAgentContext = isRecord(existingNvext.agent_context) ? existingNvext.agent_context : {};
+export function buildDynamoAgentHints(
+	config: DynamoProviderRuntimeConfig,
+	maxTokens?: number,
+): DynamoAgentHints | undefined {
+	const priority = config.priority;
+	const osl = config.osl ?? maxTokens;
+	const speculativePrefill = config.speculativePrefill;
 
+	if (priority === undefined && osl === undefined && speculativePrefill === undefined) {
+		return undefined;
+	}
 	return {
-		...payloadRecord,
-		nvext: {
-			...existingNvext,
-			agent_context: {
-				...agentContext,
-				...existingAgentContext,
-			},
-		},
+		...(priority !== undefined ? { priority } : {}),
+		...(osl !== undefined ? { osl } : {}),
+		...(speculativePrefill !== undefined ? { speculative_prefill: speculativePrefill } : {}),
 	};
 }
 
-export function mergeDynamoSessionControl(payload: unknown, sessionControl: DynamoSessionControl): unknown {
+export function mergeDynamoNvext(
+	payload: unknown,
+	agentContext: DynamoAgentContext,
+	agentHints?: DynamoAgentHints,
+	sessionControl?: DynamoSessionControl,
+): unknown {
 	const payloadRecord = isRecord(payload) ? payload : {};
 	const existingNvext = isRecord(payloadRecord.nvext) ? payloadRecord.nvext : {};
-	const existingSessionControl = isRecord(existingNvext.session_control) ? existingNvext.session_control : {};
 
-	return {
-		...payloadRecord,
-		nvext: {
-			...existingNvext,
-			session_control: {
-				...sessionControl,
-				...existingSessionControl,
-			},
-		},
-	};
+	const nvext: Record<string, unknown> = { ...existingNvext };
+
+	// agent_context: caller fields win over injected defaults
+	const existingAgentContext = isRecord(nvext.agent_context) ? nvext.agent_context : {};
+	nvext.agent_context = { ...agentContext, ...existingAgentContext };
+
+	// agent_hints: caller fields win
+	if (agentHints) {
+		const existingHints = isRecord(nvext.agent_hints) ? nvext.agent_hints : {};
+		nvext.agent_hints = { ...agentHints, ...existingHints };
+	}
+
+	// session_control: caller fields win
+	if (sessionControl) {
+		const existingSessionControl = isRecord(nvext.session_control) ? nvext.session_control : {};
+		nvext.session_control = { ...sessionControl, ...existingSessionControl };
+	}
+
+	return { ...payloadRecord, nvext };
 }
 
 export function buildDynamoHeaders(
@@ -75,8 +87,7 @@ export function buildDynamoHeaders(
 	createRequestId: () => string = randomUUID,
 ): Record<string, string> {
 	const nextHeaders = { ...headers };
-	const normalizedTarget = "x-request-id";
-	const hasIt = Object.keys(nextHeaders).some((key) => key.toLowerCase() === normalizedTarget);
+	const hasIt = Object.keys(nextHeaders).some((key) => key.toLowerCase() === "x-request-id");
 	if (!hasIt) {
 		nextHeaders["x-request-id"] = createRequestId();
 	}

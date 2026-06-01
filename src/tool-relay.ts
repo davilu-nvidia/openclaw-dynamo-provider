@@ -4,7 +4,7 @@
 import { Buffer } from "node:buffer";
 import { encode } from "@msgpack/msgpack";
 import { Push } from "zeromq";
-import type { DynamoProviderRuntimeConfig } from "./config.js";
+import type { DynamoAgentContext, DynamoProviderRuntimeConfig } from "./config.js";
 
 export const DEFAULT_TOOL_EVENTS_TOPIC = "agent-tool-events";
 export const DEFAULT_TOOL_EVENT_QUEUE_CAPACITY = 100000;
@@ -25,21 +25,12 @@ export interface DynamoToolRelayConfig {
 	queueCapacity: number;
 }
 
-export interface DynamoTraceAgentContext {
-	session_type_id: string;
-	session_id: string;
-	trajectory_id: string;
-	parent_trajectory_id?: string;
-}
-
 export type DynamoToolStatus = "running" | "succeeded" | "error" | "cancelled";
 export type DynamoToolTraceEventType = "tool_start" | "tool_end" | "tool_error";
 
 export interface DynamoAgentToolEvent {
 	tool_call_id: string;
 	tool_class: string;
-	started_at_unix_ms?: number;
-	ended_at_unix_ms?: number;
 	status?: DynamoToolStatus;
 	duration_ms?: number;
 	output_bytes?: number;
@@ -51,7 +42,7 @@ export interface DynamoAgentTraceRecord {
 	event_type: DynamoToolTraceEventType;
 	event_time_unix_ms: number;
 	event_source: "harness";
-	agent_context: DynamoTraceAgentContext;
+	agent_context: DynamoAgentContext;
 	tool: DynamoAgentToolEvent;
 }
 
@@ -77,10 +68,8 @@ export interface ToolExecutionEndEvent {
 }
 
 interface ToolCallStart {
-	agentContext: DynamoTraceAgentContext;
-	toolName: string;
+	agentContext: DynamoAgentContext;
 	toolClass: string;
-	startedAtUnixMs: number;
 	startedAtPerfMs: number;
 }
 
@@ -132,17 +121,17 @@ export function readDynamoToolRelayConfig(env: DynamoToolRelayEnvironment = proc
 	};
 }
 
-export function buildDynamoTraceAgentContext(
+export function buildTraceAgentContext(
 	config: DynamoProviderRuntimeConfig,
 	sessionId: string | undefined,
-): DynamoTraceAgentContext | undefined {
-	const trajectoryId = config.trajectoryId ?? sessionId;
-	if (!trajectoryId) return undefined;
+): DynamoAgentContext | undefined {
+	const programId = config.programId ?? sessionId;
+	if (!programId) return undefined;
 	return {
-		session_type_id: config.sessionTypeId,
-		session_id: config.sessionId ?? trajectoryId,
-		trajectory_id: trajectoryId,
-		...(config.parentTrajectoryId ? { parent_trajectory_id: config.parentTrajectoryId } : {}),
+		workflow_type_id: config.workflowTypeId,
+		workflow_id: config.workflowId ?? programId,
+		program_id: programId,
+		...(config.parentProgramId ? { parent_program_id: config.parentProgramId } : {}),
 	};
 }
 
@@ -240,15 +229,13 @@ export class DynamoToolEventRelay {
 	) {}
 
 	handleToolExecutionStart(event: ToolExecutionStartEvent): void {
-		const agentContext = buildDynamoTraceAgentContext(this.config, this.sessionId);
+		const agentContext = buildTraceAgentContext(this.config, this.sessionId);
 		if (!agentContext) return;
 		const startedAtUnixMs = this.nowUnixMs();
 		const toolClass = getToolClass(event.toolName);
 		this.starts.set(event.toolCallId, {
 			agentContext,
-			toolName: event.toolName,
 			toolClass,
-			startedAtUnixMs,
 			startedAtPerfMs: this.nowPerfMs(),
 		});
 		this.publisher.publish({
@@ -260,7 +247,6 @@ export class DynamoToolEventRelay {
 			tool: {
 				tool_call_id: event.toolCallId,
 				tool_class: toolClass,
-				started_at_unix_ms: startedAtUnixMs,
 				status: "running",
 			},
 		});
@@ -271,9 +257,8 @@ export class DynamoToolEventRelay {
 		const endedAtPerfMs = this.nowPerfMs();
 		const start = this.starts.get(event.toolCallId);
 		this.starts.delete(event.toolCallId);
-		const agentContext = start?.agentContext ?? buildDynamoTraceAgentContext(this.config, this.sessionId);
+		const agentContext = start?.agentContext ?? buildTraceAgentContext(this.config, this.sessionId);
 		if (!agentContext) return;
-		const startedAtUnixMs = start?.startedAtUnixMs ?? endedAtUnixMs;
 		const durationMs =
 			start === undefined ? 0 : Math.max(0, Math.round((endedAtPerfMs - start.startedAtPerfMs) * 1000) / 1000);
 		const status: DynamoToolStatus = event.isError ? "error" : "succeeded";
@@ -288,8 +273,6 @@ export class DynamoToolEventRelay {
 			tool: {
 				tool_call_id: event.toolCallId,
 				tool_class: toolClass,
-				started_at_unix_ms: startedAtUnixMs,
-				ended_at_unix_ms: endedAtUnixMs,
 				duration_ms: durationMs,
 				status,
 				...(event.isError ? { error_type: "openclaw_tool_error" } : {}),
