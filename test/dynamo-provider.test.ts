@@ -27,6 +27,7 @@ describe("buildDynamoAgentContext", () => {
 			workflow_id: "wf-1",
 			program_id: "prog-1",
 			parent_program_id: "parent-prog",
+			phase: "reasoning",
 		});
 	});
 	it("falls back to provided sessionId", () => {

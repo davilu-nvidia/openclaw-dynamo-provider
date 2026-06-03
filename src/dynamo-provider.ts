@@ -31,6 +31,7 @@ export function buildDynamoAgentContext(
 		workflow_id: config.workflowId ?? sessionId ?? "",
 		program_id: config.programId ?? sessionId ?? "",
 		...(config.parentProgramId ? { parent_program_id: config.parentProgramId } : {}),
+		phase: "reasoning",
 	};
 }
 

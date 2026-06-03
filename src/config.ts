@@ -60,6 +60,7 @@ export interface DynamoAgentContext {
 	workflow_id: string;
 	program_id: string;
 	parent_program_id?: string;
+	phase: string;
 }
 
 export interface DynamoAgentHints {

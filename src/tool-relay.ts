@@ -31,6 +31,8 @@ export type DynamoToolTraceEventType = "tool_start" | "tool_end" | "tool_error";
 export interface DynamoAgentToolEvent {
 	tool_call_id: string;
 	tool_class: string;
+	started_at_unix_ms?: number;
+	ended_at_unix_ms?: number;
 	status?: DynamoToolStatus;
 	duration_ms?: number;
 	output_bytes?: number;
@@ -70,6 +72,7 @@ export interface ToolExecutionEndEvent {
 interface ToolCallStart {
 	agentContext: DynamoAgentContext;
 	toolClass: string;
+	startedAtUnixMs: number;
 	startedAtPerfMs: number;
 }
 
@@ -132,6 +135,7 @@ export function buildTraceAgentContext(
 		workflow_id: config.workflowId ?? programId,
 		program_id: programId,
 		...(config.parentProgramId ? { parent_program_id: config.parentProgramId } : {}),
+		phase: "reasoning",
 	};
 }
 
@@ -236,6 +240,7 @@ export class DynamoToolEventRelay {
 		this.starts.set(event.toolCallId, {
 			agentContext,
 			toolClass,
+			startedAtUnixMs,
 			startedAtPerfMs: this.nowPerfMs(),
 		});
 		this.publisher.publish({
@@ -247,6 +252,7 @@ export class DynamoToolEventRelay {
 			tool: {
 				tool_call_id: event.toolCallId,
 				tool_class: toolClass,
+				started_at_unix_ms: startedAtUnixMs,
 				status: "running",
 			},
 		});
@@ -259,6 +265,7 @@ export class DynamoToolEventRelay {
 		this.starts.delete(event.toolCallId);
 		const agentContext = start?.agentContext ?? buildTraceAgentContext(this.config, this.sessionId);
 		if (!agentContext) return;
+		const startedAtUnixMs = start?.startedAtUnixMs ?? endedAtUnixMs;
 		const durationMs =
 			start === undefined ? 0 : Math.max(0, Math.round((endedAtPerfMs - start.startedAtPerfMs) * 1000) / 1000);
 		const status: DynamoToolStatus = event.isError ? "error" : "succeeded";
@@ -273,6 +280,8 @@ export class DynamoToolEventRelay {
 			tool: {
 				tool_call_id: event.toolCallId,
 				tool_class: toolClass,
+				started_at_unix_ms: startedAtUnixMs,
+				ended_at_unix_ms: endedAtUnixMs,
 				duration_ms: durationMs,
 				status,
 				...(event.isError ? { error_type: "openclaw_tool_error" } : {}),
