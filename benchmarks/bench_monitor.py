@@ -40,9 +40,14 @@ def parse_prometheus(text):
 def get_frontend_logs():
     try:
         out = subprocess.check_output(
-            ["docker", "logs", "dynamo-frontend", "--tail", "5000"],
+            ["docker", "logs", "dynamo-frontend", "--tail", "10000"],
             stderr=subprocess.STDOUT, timeout=10
         ).decode(errors='replace')
+        # Only return logs after the last "KV Routing initialized" (latest frontend start)
+        marker = "KV Routing initialized"
+        idx = out.rfind(marker)
+        if idx != -1:
+            return out[idx:]
         return out
     except:
         return ""
@@ -227,16 +232,16 @@ canvas { max-height: 180px; }
   <div class="card">
     <h3>Worker Distribution</h3>
     <div class="worker-grid">
-      <div><div class="worker-label">A (saved)</div><canvas id="workerChartA"></canvas></div>
-      <div><div class="worker-label">B (live)</div><canvas id="workerChartB"></canvas></div>
+      <div><div class="worker-label" id="worker-label-a">A (saved)</div><canvas id="workerChartA"></canvas></div>
+      <div><div class="worker-label" id="worker-label-b">Current</div><canvas id="workerChartB"></canvas></div>
     </div>
   </div>
   <div class="card">
-    <h3>TTFT per Request (ms)</h3>
+    <h3>TTFT per Request (ms) - A(green) vs B(blue)</h3>
     <canvas id="ttftChart"></canvas>
   </div>
   <div class="card">
-    <h3>ITL per Request (ms)</h3>
+    <h3>ITL per Request (ms) - A(green) vs B(blue)</h3>
     <canvas id="itlChart"></canvas>
   </div>
   <div class="card full req-scroll">
@@ -252,12 +257,18 @@ let snapshotData = null;
 const COLORS = ['#76b900','#ff6384','#36a2eb','#ffce56','#4bc0c0','#9966ff','#ff9f40','#c9cbcf'];
 
 const ttftChart = new Chart(document.getElementById('ttftChart').getContext('2d'), {
-  type:'bar', data:{labels:[],datasets:[{label:'TTFT',data:[],backgroundColor:'#76b900'}]},
-  options:{responsive:true,scales:{y:{beginAtZero:true}},plugins:{legend:{display:false}}}
+  type:'bar', data:{labels:[],datasets:[
+    {label:'A',data:[],backgroundColor:'rgba(118,185,0,0.6)'},
+    {label:'Current',data:[],backgroundColor:'rgba(54,162,235,0.6)'}
+  ]},
+  options:{responsive:true,scales:{y:{beginAtZero:true}},plugins:{legend:{display:true,labels:{boxWidth:10}}}}
 });
 const itlChart = new Chart(document.getElementById('itlChart').getContext('2d'), {
-  type:'bar', data:{labels:[],datasets:[{label:'ITL',data:[],backgroundColor:'#36a2eb'}]},
-  options:{responsive:true,scales:{y:{beginAtZero:true}},plugins:{legend:{display:false}}}
+  type:'bar', data:{labels:[],datasets:[
+    {label:'A',data:[],backgroundColor:'rgba(118,185,0,0.6)'},
+    {label:'Current',data:[],backgroundColor:'rgba(54,162,235,0.6)'}
+  ]},
+  options:{responsive:true,scales:{y:{beginAtZero:true}},plugins:{legend:{display:true,labels:{boxWidth:10}}}}
 });
 const workerChartA = new Chart(document.getElementById('workerChartA').getContext('2d'), {
   type:'doughnut', data:{labels:[],datasets:[{data:[],backgroundColor:COLORS}]},
@@ -346,11 +357,21 @@ async function refresh() {
     document.getElementById('kv-hit').textContent = (metrics.kv_hit_rate*100).toFixed(1)+'%';
     document.getElementById('avg-ttft').textContent = metrics.ttft_avg_ms.toFixed(0);
 
-    ttftChart.data.labels = reqs.map((_,i)=>i+1);
-    ttftChart.data.datasets[0].data = reqs.map(r=>r.ttft_ms||0);
+    // TTFT/ITL charts with A/B overlay
+    const maxLen = Math.max(reqs.length, snapshotData ? snapshotData.requests.length : 0);
+    const labels = Array.from({length: maxLen}, (_,i) => i+1);
+    ttftChart.data.labels = labels;
+    itlChart.data.labels = labels;
+    if (snapshotData && snapshotData.requests) {
+      ttftChart.data.datasets[0].data = snapshotData.requests.map(r=>r.ttft_ms||0);
+      itlChart.data.datasets[0].data = snapshotData.requests.map(r=>r.itl_ms||0);
+    } else {
+      ttftChart.data.datasets[0].data = [];
+      itlChart.data.datasets[0].data = [];
+    }
+    ttftChart.data.datasets[1].data = reqs.map(r=>r.ttft_ms||0);
+    itlChart.data.datasets[1].data = reqs.map(r=>r.itl_ms||0);
     ttftChart.update();
-    itlChart.data.labels = reqs.map((_,i)=>i+1);
-    itlChart.data.datasets[0].data = reqs.map(r=>r.itl_ms||0);
     itlChart.update();
 
     // B worker chart (live)
@@ -372,7 +393,7 @@ async function refresh() {
   const snap = await fetch('/api/snapshot').then(r=>r.json());
   if (snap) snapshotData = snap;
   refresh();
-  setInterval(refresh, 3000);
+  setInterval(refresh, 5000);
 })();
 </script>
 </body>
