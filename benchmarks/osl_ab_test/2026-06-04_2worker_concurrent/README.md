@@ -59,3 +59,53 @@ With perfect osl hint and resource pressure (2 workers, 4 concurrent sessions):
 All requests within a session route to the same worker (prefix cache affinity).
 Logit score = number of overlapping prefix blocks.
 4 sessions distributed across 2 workers (~60/40 split).
+
+## Per-Request Routing Detail (Dynamo Worker IDs)
+
+Only 2 actual dynamo workers. A used ...6112/6118, B used ...6167/6173.
+
+### A (no hint) - session to dynamo worker:
+- s0012_0001 (5 req): ALL -> ...6118
+- s0106_0001 (5 req): ALL -> ...6112
+- s0082_0001 (5 req): 4 -> ...6112, 1 -> ...6118
+- s0103_0001 (5 req): 2 -> ...6118, 3 -> ...6112
+
+### B (perfect hint) - session to dynamo worker:
+- s0012_0001 (5 req): ALL -> ...6167
+- s0106_0001 (5 req): 4 -> ...6167, 1 -> ...6173
+- s0082_0001 (5 req): ALL -> ...6173
+- s0103_0001 (5 req): 4 -> ...6167, 1 -> ...6173
+
+### Conclusion on routing decisions:
+- Prefix affinity (overlap score) completely dominates routing - same session sticks to same worker
+- OSL hint did NOT change routing targets - the decay from output blocks is negligible vs overlap scores of 50K-200K
+- Minor cross-worker routing (1-2 requests per session) happens on first request when both workers have logit=0
+- OSL hint's real effect is on queue_threshold decisions, not on which worker is selected
+
+### Per-request A vs B comparison (ms):
+| # | session     |   ISL |  OSL | A_TTFT | A_E2E  | B_TTFT | B_E2E  |
+|---|-------------|-------|------|--------|--------|--------|--------|
+| 0 | s0012_0001  | 30935 |   17 |   7444 |   7631 |   7190 |   8040 |
+| 1 | s0106_0001  | 40103 |   41 |  13173 |  13641 |  13379 |  13561 |
+| 2 | s0082_0001  | 30293 |   71 |   5587 |  13893 |   8114 |  13783 |
+| 3 | s0012_0001  | 63023 |  109 |  10168 |  11957 |  22162 |  23222 |
+| 4 | s0103_0001  | 12955 | 2394 |   2165 |  34705 |  10148 |  26214 |
+| 5 | s0106_0001  | 80512 |   61 |  14943 |  16475 |   9070 |  44359 |
+| 6 | s0012_0001  | 95971 |  198 |  15150 |  17849 |   2066 |  53269 |
+| 7 | s0106_0001  |121037 |  117 |  22122 |  24539 |  13732 |  14300 |
+| 8 | s0082_0001  | 59742 | 2156 |   9053 |  70119 |  22107 |  39315 |
+| 9 | s0012_0001  |129765 |  122 |  20497 |  22495 |  30782 |  34675 |
+|10 | s0012_0001  |163675 |  112 |  25791 |  32091 |  17876 |  19894 |
+|11 | s0082_0001  | 91728 |   44 |  13936 |  44142 |  21854 |  22867 |
+|12 | s0106_0001  |161834 |  121 |  33936 |  37122 |  38895 |  45100 |
+|13 | s0103_0001  | 30729 | 2381 |  26282 |  48387 |  20338 |  60286 |
+|14 | s0082_0001  |122276 |  127 |  17744 |  59986 |  25666 |  28956 |
+|15 | s0103_0001  | 50928 |   80 |  11072 |  14506 |  12314 |  92875 |
+|16 | s0106_0001  |202860 |  880 |  50718 |  86649 |   5872 |   6652 |
+|17 | s0103_0001  | 69134 |   17 |   6909 |   7086 |   6974 |   7152 |
+|18 | s0103_0001  | 88511 |   17 |   9013 |   9215 | 110206 | 130195 |
+|19 | s0082_0001  |152572 |   56 |  66456 |  67469 |   9024 |   9242 |
+|AVG|             |       |      |  19108 |  31998 |  20389 |  34698 |
+
+Variance is dominated by timing noise (which requests happen to collide),
+not by osl hint effect. Need 200+ requests x multiple runs for significance.
